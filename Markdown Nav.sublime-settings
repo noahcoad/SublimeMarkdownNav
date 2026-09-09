@@ -1,0 +1,18 @@
+{
+	// Character pattern for a tag NAME — not the whole tag. It gets spliced into both
+	// recognized forms: the keyword form `<tag>: text` and the hashtag form `#<tag>`.
+	//
+	// The default is lowercase-only, which is what keeps capitalized prose from matching:
+	// `Heather: lunch` and `#Heather` are not tags, `heather: lunch` and `#heather` are.
+	// To also accept uppercase, use "[A-Za-z][A-Za-z0-9_-]*".
+	//
+	// Must not contain a capture group — write (?:...) if you need grouping. A pattern that
+	// won't compile, or that adds a group, is ignored with a status-bar note and the default
+	// is used instead.
+	"tag_name_pattern": "[a-z][a-z0-9_-]*",
+
+	// Skip a leading YAML `---` frontmatter block when scanning for tags, so a file-level
+	// `tags: [a, b]` key isn't reported as an in-document tag named `tags`. An unterminated
+	// `---` is treated as a horizontal rule, not frontmatter.
+	"skip_frontmatter": true
+}

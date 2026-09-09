@@ -1,0 +1,8 @@
+# keep dev-only files out of the package tarball Package Control installs
+docs/ export-ignore
+tests/ export-ignore
+.gitattributes export-ignore
+.gitignore export-ignore
+.claude/ export-ignore
+*.sublime-project export-ignore
+*.sublime-workspace export-ignore

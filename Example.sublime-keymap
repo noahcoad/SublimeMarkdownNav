@@ -1,0 +1,12 @@
+// Markdown Nav ships no key bindings — Sublime never loads this file.
+// Copy what you want into Preferences -> Key Bindings, or use
+// Preferences -> Package Settings -> Markdown Nav -> Key Bindings.
+[
+	// Walk the header tree one level at a time, then jump
+	{ "keys": ["super+ctrl+1"], "command": "mdnav_jump_to_header",
+		"context": [{ "key": "selector", "operator": "equal", "operand": "text.html.markdown" }] },
+
+	// Pick a tag, then pick one of its matches, then jump
+	{ "keys": ["super+ctrl+t"], "command": "mdnav_find_tag",
+		"context": [{ "key": "selector", "operator": "equal", "operand": "text.html.markdown" }] }
+]

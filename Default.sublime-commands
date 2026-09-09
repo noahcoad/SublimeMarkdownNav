@@ -1,0 +1,22 @@
+[
+	{ "caption": "Markdown Nav: Jump to Header", "command": "mdnav_jump_to_header" },
+	{ "caption": "Markdown Nav: Find Tag", "command": "mdnav_find_tag" },
+	{
+		"caption": "Preferences: Markdown Nav Settings",
+		"command": "edit_settings",
+		"args": {
+			"base_file": "${packages}/Markdown Nav/Markdown Nav.sublime-settings",
+			"user_file": "${packages}/User/Markdown Nav.sublime-settings",
+			"default": "{\n\t$0\n}\n"
+		}
+	},
+	{
+		"caption": "Preferences: Markdown Nav Key Bindings",
+		"command": "edit_settings",
+		"args": {
+			"base_file": "${packages}/Markdown Nav/Example.sublime-keymap",
+			"user_file": "${packages}/User/Default (${platform}).sublime-keymap",
+			"default": "[\n\t$0\n]\n"
+		}
+	}
+]

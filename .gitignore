@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+
+# python
+__pycache__/
+*.pyc
+
+# agent scratch
+.claude/
+
+# NOTE: .python-version is NOT ignored on purpose. It selects ST4's Python 3.8
+# plugin host, and gitignoring it means an install lands in the 3.3 host instead.
