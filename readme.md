@@ -29,12 +29,19 @@ has. Levels may be skipped: an `## H2` whose children are `#### H4`s works fine 
 the shallowest level actually present in that section. Headers inside fenced code blocks are
 ignored. `esc` at any level cancels without moving the caret.
 
-**The panel reopens on your last pick.** The top panel highlights the section containing it, and
-each level down highlights the next step along that path, so re-running the command puts you right
-back where you were. Sublime's quick panel can't be pre-filled with filter text, so this is done
-with a pre-highlighted row — type to filter as usual, or press `enter` immediately to re-jump. The
-memory is per view and keyed on header *text* (so edits above a header don't lose it), and lasts
-only for the session.
+**The panels reopen on your last pick.** The whole chain you drilled down is remembered — `## A` →
+`### A1` → `#### detail` — so each panel highlights the step you took through it and re-running the
+command walks you straight back, `enter` `enter` `enter`. Sublime's quick panel can't be pre-filled
+with filter text, so this is done with a pre-highlighted row: type to filter as usual, or press
+`enter` immediately to re-jump. Picking `(jump here)` is remembered too, and highlights that row.
+
+The memory is keyed on header *text* rather than position, so edits above a pick don't lose it. If a
+header in the chain gets renamed, the panel falls back to highlighting the branch that still
+contains the deepest remembered header instead of giving up. If the chain is gone entirely, no row
+is highlighted.
+
+It **persists across closing the file and restarting Sublime**, and rides along with whatever syncs
+your `Packages/User` between machines — see [`persist_last_header`](#settings).
 
 ### The major header level
 
@@ -49,6 +56,11 @@ match** (with its line number), then jump. Both are fuzzy-filterable like any Su
 
 Match labels are the *tagged text* — what the line says with the tag itself stripped out — so the
 list reads as content rather than as a column of repeated tag names.
+
+Both panels reopen on your last pick, the same way Jump to Header's do and under the same
+[`persist_last_header`](#settings) setting: the tag panel highlights the tag you last used, and its
+match panel the match you took. Pick a different tag and no match is pre-highlighted, since a label
+from another tag's list wouldn't mean anything there.
 
 ## How tags are defined
 
@@ -152,7 +164,8 @@ comes from the section anchor instead, or `(top of doc)` if there's no preceding
 ```json
 {
 	"tag_name_pattern": "[a-z][a-z0-9_-]*",
-	"skip_frontmatter": true
+	"skip_frontmatter": true,
+	"persist_last_header": true
 }
 ```
 
@@ -163,6 +176,35 @@ group 1 for scope and label extraction to work. A pattern that won't compile, or
 is ignored with a note in the status bar and the default is used instead.
 
 **`skip_frontmatter`** — whether to skip a leading YAML `---` block when scanning for tags.
+
+**`persist_last_header`** — whether the last pick of **both** commands survives closing the file and
+restarting Sublime. (The name is historical; it covers Find Tag's tag and match too.)
+
+State goes in **`Packages/User/Markdown Nav.state.json`**, keyed on file path:
+
+```json
+{
+	"version": 1,
+	"files": {
+		"/Users/you/notes/journal.md": {
+			"at": 1788992846,
+			"header": [[2, "September"], [3, "2026-09-09"]],
+			"tag": ["win", "shipped the thing"]
+		}
+	}
+}
+```
+
+`Packages/User` is where your settings live, so **whatever already syncs them between machines
+carries this too** — a Dropbox symlink, Sync Settings, a git repo. That's the reason it isn't in
+`Cache/`, which is machine-local by design. The tradeoff of a synced file is that two machines
+writing at once can produce a conflicted copy; writes are atomic and coalesced (one per ~2s of
+jumping, not one per jump), and an unreadable file is reported in the status bar and reset rather
+than raising. Delete the file to forget everything.
+
+The 200 least-recently-used files are kept, pruned on write. Set the setting to `false` and the
+memory lasts only for the session, per view, with nothing written to disk. Unsaved buffers are
+always session-only — there's no path to key them on.
 
 Everything else about tag handling is structural rather than a preference, and lives in code: which
 of the two forms a line uses, whether the scope is a line or a section, where a section's anchor is,
@@ -178,8 +220,8 @@ Sublime Text 4, build 4107 or newer (it runs in the Python 3.8 plugin host).
 ## Layout
 
 ```
-mdnav.py                       # both commands and the parsing helpers
-Markdown Nav.sublime-settings  # tag_name_pattern, skip_frontmatter
+mdnav.py                       # both commands, the parsing helpers, the last-pick store
+Markdown Nav.sublime-settings  # tag_name_pattern, skip_frontmatter, persist_last_header
 Default.sublime-commands       # Command Palette entries
 Main.sublime-menu              # Preferences -> Package Settings -> Markdown Nav
 Example.sublime-keymap         # suggested bindings; Sublime never loads this file

@@ -28,6 +28,7 @@ _sublime.status_message = lambda *a, **k: None
 _sublime.load_settings = lambda name: _FakeSettings()
 _sublime.set_timeout = lambda fn, ms: None
 _sublime.Region = lambda a, b=None: (a, b)
+_sublime.packages_path = lambda: "/nonexistent"
 _sublime_plugin = types.ModuleType("sublime_plugin")
 _sublime_plugin.TextCommand = type("TextCommand", (object,), {})
 sys.modules["sublime"] = _sublime
@@ -170,6 +171,35 @@ for name, levels, want in [
 	("skipped levels: lone H2 then H4s -> H4", [2, 4, 4], 4),
 ]:
 	check("major_level %s" % name, mdnav._major_level(levels), want)
+
+
+# ---------- last-pick preselection (Jump to Header's remembered chain) ----------
+#
+# Outline under test:  # Doc / ## A / ### A1 / ### A2 / ## B
+# Panel rows are (key, descendant_keys); keys are (level, caption).
+
+A, A1, A2, B = (2, "A"), (3, "A1"), (3, "A2"), (2, "B")
+TOP = [(A, {A1, A2}), (B, set())]			# first panel: the H2s
+UNDER_A = [(A1, set()), (A2, set())]		# second panel: A's children, with (jump here) on top
+
+for name, chain, path, rows, jump_here, want in [
+	("no memory -> nothing highlighted", [], [], TOP, False, -1),
+	("top panel highlights the branch holding the chain", [A, A2], [], TOP, False, 0),
+	("top panel, other branch", [B], [], TOP, False, 1),
+	("second panel highlights the remembered child", [A, A2], [A], UNDER_A, True, 2),
+	("second panel, first child", [A, A1], [A], UNDER_A, True, 1),
+	# chain ends at this panel's parent -> the user picked "(jump here)" last time
+	("chain ends at parent -> (jump here)", [A], [A], UNDER_A, True, 0),
+	# leaf-only chains (what a pre-chain store would hold) still resolve via containment
+	("leaf-only chain still finds its branch", [A2], [], TOP, False, 0),
+	# a renamed ancestor falls back to containment rather than giving up
+	("renamed ancestor -> containment fallback", [(2, "A renamed"), A2], [], TOP, False, 0),
+	# nothing in the chain exists anymore
+	("stale chain -> nothing", [(2, "Gone"), (3, "Also gone")], [], TOP, False, -1),
+	# JSON round-trips tuples into lists; both must compare equal
+	("lists from JSON compare like tuples", [[2, "A"], [3, "A2"]], [[2, "A"]], UNDER_A, True, 2),
+]:
+	check("preselect %s" % name, mdnav._preselect_row(chain, path, rows, jump_here), want)
 
 
 if FAILS:

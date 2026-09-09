@@ -8,16 +8,24 @@
 # package's rename from "mdnav" to "Markdown Nav" (2026-09-09).
 #
 # How a tag is recognized is specified in full in readme.md ("How tags are defined").
-# Two settings tune it; everything else about tag handling is structural and lives in code:
-#   tag_name_pattern — the character pattern for a tag NAME, spliced into both forms
-#   skip_frontmatter — ignore a leading YAML `---` block, so its `tags:` key isn't a tag
+# Three settings tune behavior; everything else is structural and lives in code:
+#   tag_name_pattern    — the character pattern for a tag NAME, spliced into both forms
+#   skip_frontmatter    — ignore a leading YAML `---` block, so its `tags:` key isn't a tag
+#   persist_last_header — remember the last pick of both commands across restarts
 
-import re
+import json, os, re, time
 
 import sublime
 import sublime_plugin
 
 SETTINGS = "Markdown Nav.sublime-settings"
+
+# Lives in Packages/User so it rides along with whatever syncs the settings folder (Dropbox
+# symlink, Sync Settings, Git) — the same treatment the .sublime-settings file already gets.
+# Not Cache/, which is machine-local by design and clearable at will.
+STATE_FILE = "Markdown Nav.state.json"
+STATE_LIMIT = 200		# files remembered; least-recently-used pruned on save
+SAVE_DELAY_MS = 2000	# coalesce a burst of jumps into one write (the file is synced)
 
 # Lowercase-only by default: `Heather:`/`M:`/`#Heather` are NOT tags; `heather:`/`#heather` are.
 # Keeps tag identity unambiguous and avoids false positives on capitalized prose words.
@@ -174,9 +182,124 @@ def _major_level(header_level):
 	return levels[1] if len(levels) > 1 else levels[0]
 
 
-# view id -> (level, caption) of the header last jumped to, so reopening the panel
-# lands on it. Keyed on text, not position, so edits above it don't break the match.
-_last_header = {}
+# ---------- last-pick memory ----------
+#
+# Two layers. `_mem` is per view and always on, so an unsaved buffer and a `persist_last_header:
+# false` setup behave exactly as they did before this existed. The disk store is keyed on the
+# file's path instead of a view id, which is what makes it survive closing the file, quitting
+# Sublime, and (via a synced Packages/User) hopping to the other machine.
+#
+# Everything is keyed on header/label *text*, never position, so edits above a pick don't lose it.
+
+_mem = {}			# view id -> {"header": chain, "tag": [tag, label]}
+_files = None		# path -> {"header": ..., "tag": ..., "at": epoch}; None until first read
+_dirty = False
+
+
+def _persist():
+	v = sublime.load_settings(SETTINGS).get("persist_last_header")
+	return True if v is None else bool(v)
+
+
+def _state_path():
+	# packages_path() is only valid once the plugin host is up, so this stays out of import time.
+	return os.path.join(sublime.packages_path(), "User", STATE_FILE)
+
+
+def _files_state():
+	"""The on-disk store, read once per session.
+
+	Guarded because this file syncs: a half-written copy or a Dropbox conflict resolution should
+	cost the remembered positions, not break both commands. Same spirit as the tag_name_pattern
+	fallback above — degrade with a status note rather than raise inside a key binding.
+	"""
+	global _files
+	if _files is None:
+		_files = {}
+		path = _state_path()
+		if os.path.exists(path):
+			try:
+				with open(path, encoding="utf-8") as f: d = json.load(f)
+				if isinstance(d.get("files"), dict): _files = d["files"]
+			except (ValueError, OSError):
+				sublime.status_message("Markdown Nav: ignoring unreadable %s" % STATE_FILE)
+	return _files
+
+
+def _flush():
+	"""Write the store, pruning to STATE_LIMIT least-recently-used entries first."""
+	global _dirty
+	_dirty = False
+	files = _files_state()
+	if len(files) > STATE_LIMIT:
+		stale = sorted(files, key=lambda k: files[k].get("at", 0))[:len(files) - STATE_LIMIT]
+		for k in stale: del files[k]
+	path = _state_path()
+	tmp = path + ".tmp"
+	with open(tmp, "w", encoding="utf-8") as f:
+		json.dump({"version": 1, "files": files}, f, indent="\t", sort_keys=True)
+	os.replace(tmp, path)  # atomic, so a sync client never sees a truncated file
+
+
+def _save_soon():
+	global _dirty
+	if _dirty: return
+	_dirty = True
+	sublime.set_timeout(_flush, SAVE_DELAY_MS)
+
+
+def plugin_unloaded():
+	if _dirty: _flush()
+
+
+def _recall(view, kind):
+	"""Last pick of `kind` ("header" or "tag") for this view: session memory, then the store."""
+	hit = _mem.get(view.id(), {}).get(kind)
+	if hit is not None: return hit
+	name = view.file_name()
+	if not (name and _persist()): return None
+	return _files_state().get(name, {}).get(kind)
+
+
+def _remember(view, kind, value):
+	_mem.setdefault(view.id(), {})[kind] = value
+	name = view.file_name()
+	if not (name and _persist()): return
+	entry = _files_state().setdefault(name, {})
+	entry[kind] = value
+	entry["at"] = int(time.time())
+	_save_soon()
+
+
+def _preselect_row(chain, path, rows, has_jump_here):
+	"""Which row of a Jump to Header panel to highlight, or -1 for none.
+
+	`chain` is the remembered sequence of picks, root-first; `path` is the picks that led to THIS
+	panel, so `chain[len(path)]` is the row the user chose here last time. `rows` is one
+	`(key, descendant_keys)` pair per header in the panel, in display order, where a key is
+	`(level, caption)`.
+
+	Exact by depth when the outline is unchanged. When it isn't — a caption above was edited, a
+	level inserted — it falls back to "the row whose subtree contains the remembered leaf", which
+	is how this worked before the chain was stored and still lands on the right branch.
+	"""
+	if not chain: return -1
+	chain = [tuple(c) for c in chain]
+	path = [tuple(p) for p in path]
+	base = 1 if has_jump_here else 0
+
+	def by_leaf():
+		leaf = chain[-1]
+		for n, (key, kids) in enumerate(rows):
+			if key == leaf or leaf in kids: return base + n
+		return -1
+
+	if chain[:len(path)] != path: return by_leaf()
+	if len(chain) == len(path): return 0 if has_jump_here else -1
+	want = chain[len(path)]
+	for n, (key, _kids) in enumerate(rows):
+		if key == want: return base + n
+	return by_leaf()
 
 
 def _jump(view, point):
@@ -213,10 +336,12 @@ class MdnavJumpToHeaderCommand(sublime_plugin.TextCommand):
 			sublime.status_message("Markdown Nav: no headers found")
 			return
 
+		self.chain = _recall(view, "header") or []
+
 		# Top panel = the major level: H1s when the file has several, else a level in.
 		major = _major_level(header_level)
 		roots = [k for k, h in enumerate(self.headers) if h[0] == major]
-		self._show(roots, len(self.headers), None)
+		self._show(roots, len(self.headers), None, [])
 
 	# ---------- tree helpers (indexes into self.headers) ----------
 
@@ -235,8 +360,16 @@ class MdnavJumpToHeaderCommand(sublime_plugin.TextCommand):
 
 	# ---------- panels ----------
 
-	def _show(self, idxs, hi, parent):
-		"""Panel of `idxs`; `hi` bounds their subtrees, `parent` is the header index above (or None)."""
+	def _key(self, k):
+		"""(level, caption) — a header's identity in the remembered chain. Text, not position."""
+		return (self.headers[k][0], self.headers[k][1])
+
+	def _show(self, idxs, hi, parent, path):
+		"""Panel of `idxs`; `hi` bounds their subtrees, `parent` is the header index above (or None).
+
+		`path` is the keys picked to get here, root-first, ending with `parent`'s — the chain that
+		gets stored on a jump and compared against on the next run.
+		"""
 		items = []
 		if parent is not None:
 			_, caption, ln, _pos = self.headers[parent]
@@ -254,39 +387,34 @@ class MdnavJumpToHeaderCommand(sublime_plugin.TextCommand):
 			if sel < 0: return
 			if parent is not None:
 				if sel == 0:
-					self._go(parent)
+					self._go(parent, path)  # path already ends with parent's key
 					return
 				sel -= 1
 			k = idxs[sel]
 			lo, sub_hi = self._span(k, hi)
 			kids = self._children(lo, sub_hi)
 			if not kids:
-				self._go(k)
+				self._go(k, path + [self._key(k)])
 				return
 			# Re-entrant show_quick_panel needs a tick to let the current panel close.
-			sublime.set_timeout(lambda: self._show(kids, sub_hi, k), 10)
+			sub_path = path + [self._key(k)]
+			sublime.set_timeout(lambda: self._show(kids, sub_hi, k, sub_path), 10)
 
 		self.view.window().show_quick_panel(items, on_select,
-			selected_index=self._preselect(idxs, hi, parent))
+			selected_index=self._preselect(idxs, hi, parent, path))
 
-	def _go(self, k):
-		"""Jump to header k and remember it as this view's last pick."""
-		lvl, caption, _ln, pos = self.headers[k]
-		_last_header[self.view.id()] = (lvl, caption)
-		_jump(self.view, pos)
+	def _go(self, k, chain):
+		"""Jump to header k, remembering the whole chain of picks that led there."""
+		_remember(self.view, "header", [list(c) for c in chain])
+		_jump(self.view, self.headers[k][3])
 
-	def _preselect(self, idxs, hi, parent):
-		"""Row to highlight: the one on the path to this view's last pick, else the first."""
-		last = _last_header.get(self.view.id())
-		if last is None: return -1
-		key = lambda k: (self.headers[k][0], self.headers[k][1])
-		if parent is not None and key(parent) == last: return 0
-		base = 1 if parent is not None else 0
-		for n, k in enumerate(idxs):
+	def _preselect(self, idxs, hi, parent, path):
+		"""Row to highlight: the one this panel led through last time, else none."""
+		rows = []
+		for k in idxs:
 			lo, sub_hi = self._span(k, hi)
-			if key(k) == last or any(key(j) == last for j in range(lo, sub_hi)):
-				return base + n
-		return -1
+			rows.append((self._key(k), {self._key(j) for j in range(lo, sub_hi)}))
+		return _preselect_row(self.chain, path, rows, parent is not None)
 
 
 class MdnavFindTagCommand(sublime_plugin.TextCommand):
@@ -338,6 +466,10 @@ class MdnavFindTagCommand(sublime_plugin.TextCommand):
 			n = len(tag_to_idxs[t])
 			tag_items.append(["#" + t, "{} match{}".format(n, "" if n == 1 else "es")])
 
+		# Same last-pick memory as Jump to Header: the tag panel reopens on the tag you used, and
+		# its match panel on the match you took. Keyed on tag name and label text, not position.
+		last_tag, last_label = (_recall(view, "tag") or [None, None])[:2]
+
 		def on_tag(tidx):
 			if tidx < 0: return
 			tag = tags[tidx]
@@ -346,8 +478,15 @@ class MdnavFindTagCommand(sublime_plugin.TextCommand):
 
 			def on_hit(hidx):
 				if hidx < 0: return
+				_remember(view, "tag", [tag, matches[idxs[hidx]]["label"]])
 				_jump(view, matches[idxs[hidx]]["jump_pos"])
 
-			view.window().show_quick_panel(hit_items, on_hit)
+			# Only preselect a match when this is the remembered tag — a label from a different
+			# tag's list is meaningless here.
+			pre = -1
+			if tag == last_tag:
+				pre = next((n for n, i in enumerate(idxs) if matches[i]["label"] == last_label), -1)
+			view.window().show_quick_panel(hit_items, on_hit, selected_index=pre)
 
-		view.window().show_quick_panel(tag_items, on_tag)
+		view.window().show_quick_panel(tag_items, on_tag,
+			selected_index=tags.index(last_tag) if last_tag in tags else -1)

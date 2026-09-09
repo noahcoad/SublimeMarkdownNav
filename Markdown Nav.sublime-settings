@@ -14,5 +14,16 @@
 	// Skip a leading YAML `---` frontmatter block when scanning for tags, so a file-level
 	// `tags: [a, b]` key isn't reported as an in-document tag named `tags`. An unterminated
 	// `---` is treated as a horizontal rule, not frontmatter.
-	"skip_frontmatter": true
+	"skip_frontmatter": true,
+
+	// Remember the last pick of BOTH commands (the header chain you drilled down, and the
+	// tag + match you took) across closing the file and restarting Sublime, so reopening a
+	// panel highlights where you left off.
+	//
+	// State goes in Packages/User/Markdown Nav.state.json — same folder as this file, so
+	// whatever syncs your settings between machines carries it too. Delete that file to
+	// forget everything. Set this to false and the memory lasts only for the session, per
+	// view, and nothing is written to disk. Unsaved buffers are always session-only, since
+	// there's no path to key them on.
+	"persist_last_header": true
 }
